@@ -1,0 +1,127 @@
+name: Sync Forge mirror
+
+on:
+  schedule:
+    # UTC 19:30 = Asia/Shanghai 03:30 on the following calendar day.
+    - cron: '30 19 * * *'
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Also deploy this snapshot to EdgeOne Makers (requires a configured API token)'
+        type: boolean
+        required: true
+        default: false
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'public/**'
+      - 'generated/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: forge-mirror-production
+  cancel-in-progress: false
+
+jobs:
+  sync-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      EDGEONE_PROJECT_NAME: ${{ vars.EDGEONE_PROJECT_NAME || 'forge-web-mirror' }}
+      EDGEONE_AREA: ${{ vars.EDGEONE_AREA || 'overseas' }}
+    steps:
+      - name: Check deployment configuration
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        shell: bash
+        env:
+          EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
+        run: |
+          if [ -z "$EDGEONE_API_TOKEN" ]; then
+            echo 'Configure the EDGEONE_API_TOKEN repository secret before deploying.' >&2
+            exit 1
+          fi
+          case "$EDGEONE_AREA" in
+            global|overseas) ;;
+            *) echo 'EDGEONE_AREA must be global or overseas.' >&2; exit 1 ;;
+          esac
+
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Restore verified package cache
+        uses: actions/cache@v4
+        with:
+          path: .cache/forge-mirror
+          key: ${{ runner.os }}-forge-packages-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ runner.os }}-forge-packages-v1-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Synchronize every published mod version
+        run: npm run sync
+
+      - name: Run compatibility and synchronization tests
+        run: npm test
+
+      - name: Validate deployable snapshot and files
+        run: npm run build
+
+      - name: Commit synchronized mirror files
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- public generated
+          if git diff --cached --quiet; then
+            echo 'Mirror snapshot is unchanged; no commit needed.'
+            exit 0
+          fi
+          git commit -m 'chore: sync Forge market snapshot [skip ci]'
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: Save deployable mirror snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-mirror-${{ github.run_id }}
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            public/
+            generated/
+            edge-functions/
+            src/
+            scripts/
+            edgeone.json
+            package.json
+            package-lock.json
+            README.md
+
+      # No directory argument: the CLI builds the project and bundles its Edge
+      # Functions. Deploying only public/ would omit the Toys-compatible API.
+      - name: Deploy to EdgeOne Makers
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        shell: bash
+        env:
+          EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
+        run: >-
+          npx --yes edgeone@1.6.41 makers deploy
+          -n "$EDGEONE_PROJECT_NAME"
+          -t "$EDGEONE_API_TOKEN"
+          --area "$EDGEONE_AREA"
+          --skip-ai-gateway-sync
+          --json
