@@ -56,4 +56,6 @@ Actions 缓存用于减少重复下载，缓存缺失时仍会校验并补齐全
 
 创建名为 `cesiumloader-market-mirror` 的 Git 项目（平台项目名仅支持小写），连接此仓库的 `main` 分支，根目录为仓库根目录，安装命令为 `npm ci`，构建命令为 `npm run build`，输出目录为 `public`，Node.js 版本为 `22.21.1`。EdgeOne 构建使用仓库中的已校验快照，不会再次联网同步模组。
 
-项目不需要业务密钥或运行时环境变量。GitHub 仓库变量 `FORGE_UPSTREAM` 控制同步上游地址，默认 `https://forge.hiynet.com`；EdgeOne 构建环境使用 `NODE_ENV=production` 和上述 Node.js 版本。无需在 GitHub Actions 配置 EdgeOne API Token。
+项目不需要业务密钥或自定义运行时环境变量，无需配置 `NODE_ENV` 和 `NODE_VERSION`。Node.js 版本由项目设置与 `edgeone.json` 指定，GitHub Actions 则读取 `.node-version`。
+
+GitHub 仓库变量 `FORGE_UPSTREAM` 仅控制每日同步的上游地址，省略时仍使用默认值 `https://forge.hiynet.com`。无需将其配置到 EdgeOne，也无需在 GitHub Actions 配置 EdgeOne API Token。
