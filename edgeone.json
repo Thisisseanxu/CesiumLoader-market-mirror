@@ -1,5 +1,5 @@
 {
-  "name": "forge-web-mirror",
+  "name": "cesiumloader-market-mirror",
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
   "outputDirectory": "./public",

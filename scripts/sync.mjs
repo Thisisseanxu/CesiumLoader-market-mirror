@@ -7,7 +7,7 @@ import { validateBuild } from './build.mjs';
 export const LANGUAGES = ['zh-Hans', 'zh-Hant', 'en', 'ja'];
 export const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const USER_AGENT = 'forge-web-mirror/0.1 (AstralParty.Toys compatible read-only mirror)';
+const USER_AGENT = 'CesiumLoader-market-mirror/0.1 (AstralParty.Toys compatible read-only mirror)';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
