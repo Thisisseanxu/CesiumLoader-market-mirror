@@ -3,7 +3,7 @@
   "buildCommand": "npm run build",
   "installCommand": "npm ci",
   "outputDirectory": "./public",
-  "nodeVersion": "22.22.0",
+  "nodeVersion": "22.21.1",
   "headers": [
     { "source": "/packages/*", "headers": [
       { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" },
