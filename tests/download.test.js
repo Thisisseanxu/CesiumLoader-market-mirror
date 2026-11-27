@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { serveDownload } from '../src/download.js';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invalidRange = false, arrayBuffers = false } = {}) {
+function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invalidRange = false,
+  arrayBuffers = false, contentLength = false, nativeOnly = false } = {}) {
   const Stream = ReadableStream;
   const bytes = Buffer.from('PK\x03\x04original ZIP data across three parts');
   const buffers = [bytes.subarray(0, 12), bytes.subarray(12, 27), bytes.subarray(27)];
@@ -30,6 +31,7 @@ function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invali
       headers.set('content-range', invalidRange ? 'bytes 0-0/1' : `bytes ${start}-${end}/${buffers[index].length}`);
     }
     if (index === truncatePart) body = body.subarray(0, body.length - 1);
+    if (contentLength) headers.set('content-length', String(body.length));
     // Small chunks exercise the streaming skip/limit logic, without buffer helpers.
     const stream = new Stream({ start(controller) {
       for (let offset = 0; offset < body.length; offset += 3) {
@@ -39,6 +41,7 @@ function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invali
       controller.close();
     } });
     const response = new Response(stream, { status, headers });
+    if (nativeOnly) response.body.getReader = () => { throw new Error('Full parts must use native pipeTo'); };
     response.arrayBuffer = () => { throw new Error('Must never buffer an upstream part'); };
     return response;
   };
@@ -179,4 +182,21 @@ test('native FixedLengthStream is used when available for accurate download size
   const response = await serveDownload(f.request({ range: 'bytes=8-30' }), f.entry, f.fetcher);
   assert.equal(length, 23);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), f.bytes.subarray(8, 31));
+});
+
+test('parts with HTTP lengths use native pipes without per-chunk JS readers, including byte ranges', async () => {
+  for (const headers of [{}, { range: 'bytes=8-30' }]) {
+    const f = fixture({ contentLength: true, nativeOnly: true });
+    const response = await serveDownload(f.request(headers), f.entry, f.fetcher);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), headers.range ? f.bytes.subarray(8, 31) : f.bytes);
+  }
+});
+
+test('cancelling a native piped download stops subsequent parts', async () => {
+  const f = fixture({ contentLength: true });
+  const response = await serveDownload(f.request(), f.entry, f.fetcher);
+  const reader = response.body.getReader();
+  await reader.read();
+  await reader.cancel();
+  assert.deepEqual(f.calls.map(c => c.index), [0]);
 });

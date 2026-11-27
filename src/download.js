@@ -62,7 +62,7 @@ export async function serveDownload(request, entry, fetcher = fetch, { waitUntil
     abort.abort();
     const current = state;
     state = null;
-    try { await current?.reader.cancel(); } catch { /* An aborted reader may already be closed. */ }
+    try { await current?.reader?.cancel(); } catch { /* An aborted reader may already be closed. */ }
   };
   async function openPart() {
     const part = selected[cursor++];
@@ -86,7 +86,9 @@ export async function serveDownload(request, entry, fetcher = fetch, { waitUntil
       await response.body?.cancel();
       throw new Error('Mirror part unavailable or has invalid length');
     }
-    state = { reader: response.body.getReader(), remaining: wanted,
+    const pipe = (response.headers.has('content-length') || typeof FixedLengthStream === 'function')
+      && (response.status === 206 || !partial);
+    state = { body: response.body, pipe, reader: pipe ? null : response.body.getReader(), remaining: wanted,
       skip: response.status === 206 ? 0 : part.start, received: 0, expected,
       canCancel: response.status === 200 && part.end < part.sizeBytes - 1 };
     return true;
@@ -101,11 +103,33 @@ export async function serveDownload(request, entry, fetcher = fetch, { waitUntil
   const length = range.end - range.start + 1;
   const { readable, writable } = typeof FixedLengthStream === 'function'
     ? new FixedLengthStream(length) : new TransformStream();
-  const writer = writable.getWriter();
-  writer.closed.catch(() => dispose());
+  let writer;
+  function getWriter() {
+    if (!writer) {
+      writer = writable.getWriter();
+      const current = writer;
+      current.closed.catch(() => { if (writer === current) return dispose(); });
+    }
+    return writer;
+  }
+  function releaseWriter() {
+    const current = writer;
+    writer = null;
+    current?.releaseLock();
+  }
+  getWriter(); // Observe cancellation even before a slow first body chunk arrives.
   const transfer = (async () => {
       try {
         while (state) {
+          // Static parts have verified Content-Length and HTTP framing. Native
+          // pipeTo avoids spending the edge CPU budget on every network chunk.
+          if (state.pipe) {
+            releaseWriter();
+            await state.body.pipeTo(writable, { preventClose: true, signal: abort.signal });
+            state = null;
+            if (!await openPart()) break;
+            continue;
+          }
           if (state.remaining === 0 && state.canCancel) {
             const current = state;
             state = null;
@@ -133,14 +157,14 @@ export async function serveDownload(request, entry, fetcher = fetch, { waitUntil
           bytes = bytes.subarray(skipped);
           const count = Math.min(state.remaining, bytes.byteLength);
           state.remaining -= count;
-          if (count) await writer.write(bytes.subarray(0, count));
+          if (count) await getWriter().write(bytes.subarray(0, count));
         }
         await dispose();
-        await writer.close();
+        await getWriter().close();
       } catch (error) {
         if (disposed) return;
         await dispose();
-        try { await writer.abort(error); } catch { /* The client may already have cancelled. */ }
+        try { await getWriter().abort(error); } catch { /* The client may already have cancelled. */ }
       }
   })();
   waitUntil?.(transfer);
