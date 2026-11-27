@@ -78,6 +78,8 @@ Actions 缓存用于减少重复下载，缓存缺失时仍会校验并补齐全
 
 创建名为 `cesium-market-mirror` 的 Git 项目，连接 `Thisisseanxu/cesium-market-mirror` 的 `main` 分支，开启生产环境的自动部署，根目录为仓库根目录，框架选择 Other，安装命令为 `npm ci`，构建命令为 `npm run build`，输出目录为 `public`，Node.js 版本为 `22.21.1`。EdgeOne 构建使用仓库中的已校验快照，不会再次联网同步模组。根目录下的 `edge-functions/` 会与静态文件一起部署。
 
+确认 GitHub 中 EdgeOne GitHub App 的仓库授权范围包含 `Thisisseanxu/cesium-market-mirror`。自动部署需要这项仓库授权；在 EdgeOne 关联仓库并开启自动部署后，也应核对 GitHub 侧的授权范围。仓库改名或重新创建项目时重新检查，确保后续代码与 Actions 同步提交都能触发部署。
+
 项目不需要业务密钥或自定义运行时环境变量，无需配置 `NODE_ENV` 和 `NODE_VERSION`。Node.js 版本由项目设置与 `edgeone.json` 指定，GitHub Actions 则读取 `.node-version`。
 
 GitHub 仓库变量 `FORGE_UPSTREAM` 仅控制每日同步的上游地址，省略时仍使用默认值 `https://forge.hiynet.com`。无需将其配置到 EdgeOne，也无需在 GitHub Actions 配置 EdgeOne API Token。
