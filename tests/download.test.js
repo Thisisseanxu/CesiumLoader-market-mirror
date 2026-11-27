@@ -141,3 +141,11 @@ test('cancellation while waiting on a slow part closes the pending read', async 
   assert.equal(cancelled, true);
   assert.equal(calls, 1);
 });
+
+test('edge requests without AbortSignal still stream the original package', async () => {
+  const f = fixture();
+  const request = f.request();
+  const response = await serveDownload({ url: request.url, method: 'GET', headers: request.headers }, f.entry, f.fetcher);
+  assert.equal(response.status, 200);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), f.bytes);
+});

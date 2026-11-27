@@ -50,14 +50,15 @@ export async function serveDownload(request, entry, fetcher = fetch) {
   }
   const abort = new AbortController();
   const cancel = () => abort.abort();
-  request.signal.addEventListener('abort', cancel, { once: true });
-  if (request.signal.aborted) abort.abort();
+  // EdgeOne's incoming Request does not always expose the optional signal.
+  request.signal?.addEventListener('abort', cancel, { once: true });
+  if (request.signal?.aborted) abort.abort();
   let state;
   let cursor = 0;
   let disposed = false;
   const dispose = async () => {
     disposed = true;
-    request.signal.removeEventListener('abort', cancel);
+    request.signal?.removeEventListener('abort', cancel);
     abort.abort();
     const current = state;
     state = null;
