@@ -1,0 +1,10 @@
+{
+  "generatedAt": "2026-11-27T14:59:44.310Z",
+  "limitBytes": 1000000000,
+  "staticBudgetBytes": 983222784,
+  "reservedBytes": 16777216,
+  "staticBytes": 70258917,
+  "mods": 45,
+  "resources": 2,
+  "skipped": []
+}
