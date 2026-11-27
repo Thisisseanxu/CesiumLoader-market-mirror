@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { serveDownload } from '../src/download.js';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invalidRange = false } = {}) {
+function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invalidRange = false, arrayBuffers = false } = {}) {
+  const Stream = ReadableStream;
   const bytes = Buffer.from('PK\x03\x04original ZIP data across three parts');
   const buffers = [bytes.subarray(0, 12), bytes.subarray(12, 27), bytes.subarray(27)];
   const sha256 = hash(bytes);
@@ -30,8 +31,11 @@ function fixture({ ignoreRange = false, failPart = -1, truncatePart = -1, invali
     }
     if (index === truncatePart) body = body.subarray(0, body.length - 1);
     // Small chunks exercise the streaming skip/limit logic, without buffer helpers.
-    const stream = new ReadableStream({ start(controller) {
-      for (let offset = 0; offset < body.length; offset += 3) controller.enqueue(body.subarray(offset, offset + 3));
+    const stream = new Stream({ start(controller) {
+      for (let offset = 0; offset < body.length; offset += 3) {
+        const bytes = body.subarray(offset, offset + 3);
+        controller.enqueue(arrayBuffers ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) : bytes);
+      }
       controller.close();
     } });
     const response = new Response(stream, { status, headers });
@@ -148,4 +152,31 @@ test('edge requests without AbortSignal still stream the original package', asyn
   const response = await serveDownload({ url: request.url, method: 'GET', headers: request.headers }, f.entry, f.fetcher);
   assert.equal(response.status, 200);
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), f.bytes);
+});
+
+test('edge runtime without a ReadableStream constructor supports ArrayBuffer chunks and waitUntil', async t => {
+  const f = fixture({ arrayBuffers: true });
+  t.mock.method(globalThis, 'ReadableStream', function () { throw new Error('EdgeOne does not expose this constructor'); });
+  const tasks = [];
+  const response = await serveDownload(f.request(), f.entry, f.fetcher, { waitUntil: task => tasks.push(task) });
+  assert.equal(tasks.length, 1);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), f.bytes);
+  await tasks[0];
+});
+
+test('native FixedLengthStream is used when available for accurate download size', async t => {
+  const f = fixture();
+  let length;
+  class FixedStream extends TransformStream {
+    constructor(size) { super(); length = size; }
+  }
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'FixedLengthStream');
+  Object.defineProperty(globalThis, 'FixedLengthStream', { configurable: true, value: FixedStream });
+  t.after(() => {
+    if (previous) Object.defineProperty(globalThis, 'FixedLengthStream', previous);
+    else delete globalThis.FixedLengthStream;
+  });
+  const response = await serveDownload(f.request({ range: 'bytes=8-30' }), f.entry, f.fetcher);
+  assert.equal(length, 23);
+  assert.deepEqual(Buffer.from(await response.arrayBuffer()), f.bytes.subarray(8, 31));
 });

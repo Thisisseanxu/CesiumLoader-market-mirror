@@ -125,7 +125,7 @@ function stickerCounts(request, url, snapshot) {
 }
 
 /** Serve the Forge public protocol entirely from one immutable sync snapshot. */
-export function handleRequest(request, snapshot) {
+export function handleRequest(request, snapshot, { waitUntil } = {}) {
   const url = new URL(request.url);
   const pathname = url.pathname.replace(/\/+$/, '') || '/';
   if (!pathname.startsWith('/api/')) {
@@ -167,7 +167,7 @@ export function handleRequest(request, snapshot) {
   if (/^\/api\/downloads\/[a-f0-9]{64}\.zip$/.test(pathname)) {
     const entry = snapshot.downloads?.[pathname];
     if (!entry) return error(request, 404, 'download_not_found', 'This package is not mirrored.');
-    return serveDownload(request, entry);
+    return serveDownload(request, entry, fetch, { waitUntil });
   }
   if (pathname === '/api/stickers') {
     return json(request, snapshot.stickerCatalog ?? {

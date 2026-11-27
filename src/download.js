@@ -12,7 +12,7 @@ function rangeFor(header, size) {
 }
 
 /** Stream immutable same-origin parts into the original ZIP, including byte ranges. */
-export async function serveDownload(request, entry, fetcher = fetch) {
+export async function serveDownload(request, entry, fetcher = fetch, { waitUntil } = {}) {
   if (!entry || !/^[a-f0-9]{64}$/.test(entry.sha256) || !Number.isSafeInteger(entry.sizeBytes)
     || entry.sizeBytes <= 0 || !Array.isArray(entry.parts) || !entry.parts.length || entry.parts.length > 60
     || entry.parts.some(p => !PART_PATH.test(p.url) || !Number.isSafeInteger(p.sizeBytes) || p.sizeBytes <= 0)
@@ -96,8 +96,14 @@ export async function serveDownload(request, entry, fetcher = fetch) {
     await dispose();
     return new Response(null, { status: 502, headers: { 'cache-control': 'no-store' } });
   }
-  const body = new ReadableStream({
-    async pull(controller) {
+  // EdgeOne cannot construct ReadableStream directly. FixedLengthStream also
+  // lets its runtime retain Content-Length instead of forcing chunked encoding.
+  const length = range.end - range.start + 1;
+  const { readable, writable } = typeof FixedLengthStream === 'function'
+    ? new FixedLengthStream(length) : new TransformStream();
+  const writer = writable.getWriter();
+  writer.closed.catch(() => dispose());
+  const transfer = (async () => {
       try {
         while (state) {
           if (state.remaining === 0 && state.canCancel) {
@@ -116,7 +122,10 @@ export async function serveDownload(request, entry, fetcher = fetch) {
             if (!await openPart()) break;
             continue;
           }
-          let bytes = result.value;
+          const value = result.value;
+          // Native edge readers may return ArrayBuffer rather than Uint8Array.
+          let bytes = value instanceof Uint8Array ? value : ArrayBuffer.isView(value)
+            ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : new Uint8Array(value);
           state.received += bytes.byteLength;
           if (state.received > state.expected) throw new Error('Mirror part exceeds declared length');
           const skipped = Math.min(state.skip, bytes.byteLength);
@@ -124,17 +133,16 @@ export async function serveDownload(request, entry, fetcher = fetch) {
           bytes = bytes.subarray(skipped);
           const count = Math.min(state.remaining, bytes.byteLength);
           state.remaining -= count;
-          if (count) { controller.enqueue(bytes.subarray(0, count)); return; }
+          if (count) await writer.write(bytes.subarray(0, count));
         }
         await dispose();
-        controller.close();
+        await writer.close();
       } catch (error) {
         if (disposed) return;
         await dispose();
-        controller.error(error);
+        try { await writer.abort(error); } catch { /* The client may already have cancelled. */ }
       }
-    },
-    async cancel() { await dispose(); },
-  });
-  return new Response(body, { status: range.partial ? 206 : 200, headers });
+  })();
+  waitUntil?.(transfer);
+  return new Response(readable, { status: range.partial ? 206 : 200, headers });
 }
