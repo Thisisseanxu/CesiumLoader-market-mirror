@@ -41,6 +41,7 @@ test('full sync mirrors four languages and all versions; restores corrupt cache;
     const path = new URL(req.url, 'http://localhost').pathname;
     res.setHeader('Content-Type', 'application/json');
     if (path === '/api/mods') return res.end(JSON.stringify({ apiVersion: 1, total: 1, page: 1, pageSize: 60, items: [{ ...item, sha256: staleSummary ? '0'.repeat(64) : item.sha256 }] }));
+    if (path === '/api/resources') return res.end(JSON.stringify({ apiVersion: 1, total: 0, items: [], types: [] }));
     if (path === '/api/mods/Example') return res.end(JSON.stringify({ ...item, license: 'EULA', licenseText: 'preserve me', versions: [version, { ...version, version: '0.9.0' }] }));
     if (path === '/api/stickers') return res.end(JSON.stringify({ groups: [{ groupId: '1' }], items: [{ stickerId: 'sticker1', imageUrl: '/stickers/one.webp' }], total: 1 }));
     if (path === '/api/mod-stickers') return res.end(JSON.stringify({ items: [{ modId: 'Example', stickers: [{ stickerId: 'sticker1', imageUrl: '/stickers/one.webp', count: 2, reactedByMe: true }], reactionTotal: 2 }] }));

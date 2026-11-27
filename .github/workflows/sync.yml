@@ -15,7 +15,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: cesiumloader-market-mirror-sync
+  group: cesium-market-mirror-sync
   cancel-in-progress: false
 
 jobs:
@@ -48,7 +48,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Synchronize every published mod version
+      - name: Synchronize mods and resources within the 1 GB budget
         run: npm run sync
 
       - name: Run compatibility and synchronization tests
@@ -71,20 +71,10 @@ jobs:
           git pull --rebase origin main
           git push origin HEAD:main
 
-      - name: Save deployable mirror snapshot
+      - name: Save synchronization report
         uses: actions/upload-artifact@v4
         with:
-          name: cesiumloader-market-mirror-${{ github.run_id }}
-          compression-level: 0
+          name: mirror-sync-report-${{ github.run_id }}
           retention-days: 7
           if-no-files-found: error
-          path: |
-            public/
-            generated/
-            edge-functions/
-            src/
-            scripts/
-            edgeone.json
-            package.json
-            package-lock.json
-            README.md
+          path: generated/sync-report.json

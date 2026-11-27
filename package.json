@@ -1,6 +1,6 @@
 {
-  "name": "cesiumloader-market-mirror",
-  "version": "0.1.0",
+  "name": "cesium-market-mirror",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Read-only Forge market mirror compatible with AstralParty.Toys",

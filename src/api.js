@@ -1,3 +1,5 @@
+import { serveDownload } from './download.js';
+
 const LANGUAGES = ['zh-Hans', 'zh-Hant', 'en', 'ja'];
 const READ_CACHE = 'public, max-age=60, s-maxage=300';
 
@@ -40,10 +42,12 @@ function findDetail(catalog, requestedId) {
   return key === undefined ? undefined : details[key];
 }
 
-function listMods(request, url, snapshot, catalog, language) {
+function listMods(request, url, snapshot, catalog, language, resource = false) {
   const parameters = url.searchParams;
   const query = fold(parameters.get('query')?.trim());
   const tag = fold(parameters.get('tag')?.trim());
+  const origin = fold(parameters.get('origin')?.trim());
+  const type = fold(parameters.get('type')?.trim());
   const sort = parameters.get('sort');
   const page = positiveInteger(parameters.get('page'), 1);
   const pageSize = positiveInteger(parameters.get('pageSize'), 24, 60);
@@ -51,6 +55,8 @@ function listMods(request, url, snapshot, catalog, language) {
   const tags = [...new Set(allItems.flatMap((item) => item.tags ?? []))]
     .sort((a, b) => a.localeCompare(b, language));
   const items = allItems.filter((item) => {
+    if (origin && origin !== 'all' && fold(item.origin ?? 'community') !== origin) return false;
+    if (resource && type && type !== 'all' && fold(item.type) !== type) return false;
     if (tag && !(item.tags ?? []).some((value) => fold(value) === tag)) return false;
     if (!query) return true;
     return [item.id, item.name, item.summary, item.author, ...(item.tags ?? [])]
@@ -62,8 +68,8 @@ function listMods(request, url, snapshot, catalog, language) {
       return String(left.name ?? '').localeCompare(String(right.name ?? ''), language)
         || stableOrder(left, right);
     }
-    if (sort === 'downloads') {
-      return (Number(right.downloads) || 0) - (Number(left.downloads) || 0)
+    if (['downloads', 'downloads7Days', 'downloads30Days'].includes(sort)) {
+      return (Number(right[sort]) || 0) - (Number(left[sort]) || 0)
         || stableOrder(left, right);
     }
     return (Date.parse(right.updatedAt) || 0) - (Date.parse(left.updatedAt) || 0)
@@ -77,6 +83,7 @@ function listMods(request, url, snapshot, catalog, language) {
     page,
     pageSize,
     tags,
+    ...(resource ? { types: catalog.types ?? [] } : {}),
     items: items.slice(offset, offset + pageSize),
   });
 }
@@ -84,12 +91,13 @@ function listMods(request, url, snapshot, catalog, language) {
 function redirectToAsset(request, value, prefix) {
   // A snapshot is supposed to contain only mirrored static paths. Never turn
   // malformed upstream metadata into an open redirect or a live origin fetch.
-  if (typeof value !== 'string' || !value.startsWith(prefix)
+  const prefixes = Array.isArray(prefix) ? prefix : [prefix];
+  if (typeof value !== 'string' || !prefixes.some(p => value.startsWith(p))
       || value.includes('\\') || /[\r\n]/.test(value)) {
     return error(request, 503, 'asset_unavailable', 'This asset is not present in the mirror snapshot.');
   }
   const parsed = new URL(value, 'https://mirror.invalid');
-  if (!parsed.pathname.startsWith(prefix) || parsed.origin !== 'https://mirror.invalid') {
+  if (!prefixes.some(p => parsed.pathname.startsWith(p)) || parsed.origin !== 'https://mirror.invalid') {
     return error(request, 503, 'asset_unavailable', 'This asset is not present in the mirror snapshot.');
   }
   return new Response(null, {
@@ -130,6 +138,8 @@ export function handleRequest(request, snapshot) {
   }
 
   const { language, catalog } = selectCatalog(snapshot, url.searchParams.get('lang'));
+  const resourceCatalog = selectCatalog({ languages: snapshot?.resources?.languages }, language).catalog
+    ?? { items: [], details: {}, types: [] };
   const ready = snapshot?.schemaVersion === 1 && Array.isArray(catalog?.items)
     && catalog?.details && typeof catalog.details === 'object' && Boolean(snapshot.generatedAt);
   if (pathname === '/api/health') {
@@ -141,6 +151,10 @@ export function handleRequest(request, snapshot) {
       upstream: snapshot?.upstream ?? null,
       languages: Object.keys(snapshot?.languages ?? {}),
       mods: catalog?.items?.length ?? 0,
+      resources: resourceCatalog.items.length,
+      resourceVersions: Object.values(resourceCatalog.details).reduce((n, d) => n + d.versions.length, 0),
+      splitDownloads: Object.keys(snapshot?.downloads ?? {}).length,
+      syncReport: snapshot?.syncReport ?? null,
       versions: ready ? Object.values(catalog.details)
         .reduce((total, detail) => total + (detail.versions?.length ?? 0), 0) : 0,
     }, ready ? 200 : 503, { 'cache-control': 'no-store' });
@@ -148,6 +162,13 @@ export function handleRequest(request, snapshot) {
 
   if (!ready) return error(request, 503, 'snapshot_unavailable', 'Run a successful sync before deploying this mirror.');
   if (pathname === '/api/mods') return listMods(request, url, snapshot, catalog, language);
+  if (pathname === '/api/resources') return listMods(request, url, snapshot, resourceCatalog, language, true);
+  if (pathname === '/api/sync-report') return json(request, { generatedAt: snapshot.generatedAt, ...snapshot.syncReport });
+  if (/^\/api\/downloads\/[a-f0-9]{64}\.zip$/.test(pathname)) {
+    const entry = snapshot.downloads?.[pathname];
+    if (!entry) return error(request, 404, 'download_not_found', 'This package is not mirrored.');
+    return serveDownload(request, entry);
+  }
   if (pathname === '/api/stickers') {
     return json(request, snapshot.stickerCatalog ?? {
       generatedAt: snapshot.generatedAt, groups: [], items: [], total: 0,
@@ -155,23 +176,37 @@ export function handleRequest(request, snapshot) {
   }
   if (pathname === '/api/mod-stickers') return stickerCounts(request, url, snapshot);
 
-  const match = /^\/api\/mods\/([^/]+)(?:\/(download|cover))?$/.exec(pathname);
+  const match = /^\/api\/(mods|resources)\/([^/]+)(?:\/(download|cover)|\/previews\/([a-f0-9]{64})|\/versions\/([^/]+)\/manifest)?$/.exec(pathname);
   if (!match) return error(request, 404, 'not_found', 'Unknown market API route.');
   let id;
   try {
-    id = decodeURIComponent(match[1]);
+    id = decodeURIComponent(match[2]);
   } catch {
     return error(request, 400, 'invalid_id', 'The mod ID is not valid URL encoding.');
   }
-  const detail = findDetail(catalog, id);
+  const resource = match[1] === 'resources';
+  const detail = findDetail(resource ? resourceCatalog : catalog, id);
   if (!detail) return error(request, 404, 'mod_not_found', 'This mod is not present in the mirror snapshot.');
-  if (!match[2]) return json(request, detail);
-  if (match[2] === 'cover') {
+  if (match[4] || match[5]) {
+    if (!resource) return error(request, 404, 'not_found', 'Unknown market API route.');
+    if (match[4]) {
+      const preview = (detail.previews ?? []).find(p => fold(p.sha256) === match[4]);
+      return preview ? redirectToAsset(request, preview.url, '/previews/')
+        : error(request, 404, 'preview_not_found', 'This preview is not mirrored.');
+    }
+    let version;
+    try { version = decodeURIComponent(match[5]); } catch { return error(request, 400, 'invalid_version', 'Invalid version encoding.'); }
+    const selected = (detail.versions ?? []).find(v => fold(v.version) === fold(version));
+    return selected ? redirectToAsset(request, selected.manifestUrl, '/manifests/')
+      : error(request, 404, 'version_not_found', 'This version is not mirrored.');
+  }
+  if (!match[3]) return json(request, detail);
+  if (match[3] === 'cover') {
     if (!detail.coverUrl) return error(request, 404, 'cover_not_found', 'This mod has no mirrored cover.');
     return redirectToAsset(request, detail.coverUrl, '/covers/');
   }
   const version = url.searchParams.get('version')?.trim() || detail.latestVersion;
   const selected = (detail.versions ?? []).find((item) => fold(item.version) === fold(version));
   if (!selected) return error(request, 404, 'version_not_found', 'This version is not present in the mirror snapshot.');
-  return redirectToAsset(request, selected.downloadUrl, '/packages/');
+  return redirectToAsset(request, selected.downloadUrl, ['/packages/', '/api/downloads/']);
 }

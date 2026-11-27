@@ -23,7 +23,11 @@ export async function createDevServer(root, { snapshot } = {}) {
       if (!rawPath.startsWith('/') || rawPath.startsWith('//')) return sendError(outgoing, 400, 'invalid_path');
       if (rawPath === '/' || rawPath.startsWith('/api/')) {
         const route = rawPath === '/' ? '/api/health' : incoming.url;
-        const request = new Request(`http://localhost${route}`, { method: incoming.method });
+        const controller = new AbortController();
+        outgoing.on('close', () => { if (!outgoing.writableFinished) controller.abort(); });
+        const request = new Request(`http://${incoming.headers.host}${route}`, {
+          method: incoming.method, headers: incoming.headers, signal: controller.signal,
+        });
         const result = await handleRequest(request, snapshot);
         outgoing.writeHead(result.status, Object.fromEntries(result.headers));
         if (result.body) await pipeline(Readable.fromWeb(result.body), outgoing);
@@ -48,7 +52,8 @@ export async function createDevServer(root, { snapshot } = {}) {
       }
       if (!actual.startsWith(publicRoot + path.sep) || !info.isFile()) return sendError(outgoing, 404, 'not_found');
       const contentType = actual.endsWith('.zip') ? 'application/zip'
-        : actual.endsWith('.webp') ? 'image/webp' : 'application/octet-stream';
+        : actual.endsWith('.webp') ? 'image/webp'
+        : actual.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/octet-stream';
       outgoing.writeHead(200, {
         'content-type': contentType,
         'content-length': info.size,
